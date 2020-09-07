@@ -1,0 +1,99 @@
+---
+- hosts: localhost
+  gather_facts: no
+  vars_files:
+   - aws_keys.yml
+  tasks:
+   - name: create a custom vpc
+     ec2_vpc_net:
+      name: CVPC
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}" 
+      cidr_block: 10.0.0.0/16
+      region: ap-south-1
+      state: present
+      tenancy: default
+      tags:
+       Name: Mumbai
+     register: vpc
+   - name: create subnets 
+     ec2_vpc_subnet:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}" 
+      state: present
+      region: ap-south-1
+      vpc_id: "{{ vpc.vpc.id }}"
+      map_public: true
+      cidr: 10.0.1.0/24
+      tags: 
+       Name: andheri
+     register: sub
+   - name: create internet gateway
+     ec2_vpc_igw:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}" 
+      vpc_id: "{{ vpc.vpc.id }}"
+      region: ap-south-1
+      state: present
+      tags:
+       Name: for_andheri
+     register: igw
+   - name: Setup route table entries
+     ec2_vpc_route_table:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}" 
+      vpc_id: "{{ vpc.vpc.id }}"
+      region: ap-south-1
+      tags:
+       Name: Andheri_route
+      subnets:
+       - "{{ sub.subnet.id }}"
+      routes:
+       - dest: 0.0.0.0/0
+         gateway_id: "{{ igw.gateway_id }}"
+     register: route_table
+   - name: create security group
+     ec2_group:
+      name: my-s-g
+      description: security group for ssh
+      vpc_id: "{{ vpc.vpc.id }}"
+      region: ap-south-1
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+      rules:
+       - proto: tcp
+         ports:
+          - 22
+         cidr_ip: 0.0.0.0/0
+     register: sg
+   - name: create keypair
+     ec2_key:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}" 
+      region: ap-south-1
+      name: myec2-key-using-ansible
+      force: false
+      state: present
+     register: keyvalue
+     ignore_errors: true
+   - name: copy the key
+     copy:
+      content: "{{ keyvalue.key.private_key }}"
+      dest: "/root/my-aws-experiments/ansible/key.ppk"
+      mode: 0600
+     when: keyvalue.changed == true
+   - name: create ec2 instance
+     ec2:
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}" 
+      region: ap-south-1
+      count: 1
+      group_id: "{{ sg.group_id }}"
+      assign_public_ip: yes
+      vpc_subnet_id: "{{ sub.subnet.id }}"
+      key_name: "{{ keyvalue.key.name }}"
+      image: ami-09a7bbd08886aafdf
+      instance_type: t2.micro
+      wait: yes
+      instance_tags:
+       Name: Mytest_inst
